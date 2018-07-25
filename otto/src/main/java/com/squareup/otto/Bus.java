@@ -88,12 +88,12 @@ public class Bus {
   public static final String DEFAULT_IDENTIFIER = "default";
 
   /** All registered event handlers, indexed by event type. */
-  private final ConcurrentMap<Class<?>, Set<EventHandler>> handlersByType =
-          new ConcurrentHashMap<Class<?>, Set<EventHandler>>();
+  private final ConcurrentMap<EventKey, Set<EventHandler>> handlersByType =
+          new ConcurrentHashMap<EventKey, Set<EventHandler>>();
 
   /** All registered event producers, index by event type. */
-  private final ConcurrentMap<Class<?>, EventProducer> producersByType =
-          new ConcurrentHashMap<Class<?>, EventProducer>();
+  private final ConcurrentMap<EventKey, EventProducer> producersByType =
+          new ConcurrentHashMap<EventKey, EventProducer>();
 
   /** Identifier used to differentiate the event bus instance. */
   private final String identifier;
@@ -106,11 +106,11 @@ public class Bus {
 
   /** Queues of events for the current thread to dispatch. */
   private final ThreadLocal<ConcurrentLinkedQueue<EventWithHandler>> eventsToDispatch =
-      new ThreadLocal<ConcurrentLinkedQueue<EventWithHandler>>() {
-        @Override protected ConcurrentLinkedQueue<EventWithHandler> initialValue() {
-          return new ConcurrentLinkedQueue<EventWithHandler>();
-        }
-      };
+          new ThreadLocal<ConcurrentLinkedQueue<EventWithHandler>>() {
+            @Override protected ConcurrentLinkedQueue<EventWithHandler> initialValue() {
+              return new ConcurrentLinkedQueue<EventWithHandler>();
+            }
+          };
 
   /** True if the current thread is currently dispatching an event. */
   private final ThreadLocal<Boolean> isDispatching = new ThreadLocal<Boolean>() {
@@ -187,16 +187,16 @@ public class Bus {
     }
     enforcer.enforce(this);
 
-    Map<Class<?>, EventProducer> foundProducers = handlerFinder.findAllProducers(object);
-    for (Class<?> type : foundProducers.keySet()) {
+    Map<EventKey, EventProducer> foundProducers = handlerFinder.findAllProducers(object);
+    for (EventKey type : foundProducers.keySet()) {
 
       final EventProducer producer = foundProducers.get(type);
       EventProducer previousProducer = producersByType.putIfAbsent(type, producer);
       //checking if the previous producer existed
       if (previousProducer != null) {
         throw new IllegalArgumentException("Producer method for type " + type
-          + " found on type " + producer.target.getClass()
-          + ", but already registered by type " + previousProducer.target.getClass() + ".");
+                + " found on type " + producer.target.getClass()
+                + ", but already registered by type " + previousProducer.target.getClass() + ".");
       }
       Set<EventHandler> handlers = handlersByType.get(type);
       if (handlers != null && !handlers.isEmpty()) {
@@ -206,15 +206,15 @@ public class Bus {
       }
     }
 
-    Map<Class<?>, Set<EventHandler>> foundHandlersMap = handlerFinder.findAllSubscribers(object);
-    for (Class<?> type : foundHandlersMap.keySet()) {
+    Map<EventKey, Set<EventHandler>> foundHandlersMap = handlerFinder.findAllSubscribers(object);
+    for (EventKey type : foundHandlersMap.keySet()) {
       Set<EventHandler> handlers = handlersByType.get(type);
       if (handlers == null) {
         //concurrent put if absent
         Set<EventHandler> handlersCreation = new CopyOnWriteArraySet<EventHandler>();
         handlers = handlersByType.putIfAbsent(type, handlersCreation);
         if (handlers == null) {
-            handlers = handlersCreation;
+          handlers = handlersCreation;
         }
       }
       final Set<EventHandler> foundHandlers = foundHandlersMap.get(type);
@@ -223,8 +223,8 @@ public class Bus {
       }
     }
 
-    for (Map.Entry<Class<?>, Set<EventHandler>> entry : foundHandlersMap.entrySet()) {
-      Class<?> type = entry.getKey();
+    for (Map.Entry<EventKey, Set<EventHandler>> entry : foundHandlersMap.entrySet()) {
+      EventKey type = entry.getKey();
       EventProducer producer = producersByType.get(type);
       if (producer != null && producer.isValid()) {
         Set<EventHandler> foundHandlers = entry.getValue();
@@ -266,29 +266,29 @@ public class Bus {
     }
     enforcer.enforce(this);
 
-    Map<Class<?>, EventProducer> producersInListener = handlerFinder.findAllProducers(object);
-    for (Map.Entry<Class<?>, EventProducer> entry : producersInListener.entrySet()) {
-      final Class<?> key = entry.getKey();
+    Map<EventKey, EventProducer> producersInListener = handlerFinder.findAllProducers(object);
+    for (Map.Entry<EventKey, EventProducer> entry : producersInListener.entrySet()) {
+      final EventKey key = entry.getKey();
       EventProducer producer = getProducerForEventType(key);
       EventProducer value = entry.getValue();
 
       if (value == null || !value.equals(producer)) {
         throw new IllegalArgumentException(
-            "Missing event producer for an annotated method. Is " + object.getClass()
-                + " registered?");
+                "Missing event producer for an annotated method. Is " + object.getClass()
+                        + " registered?");
       }
       producersByType.remove(key).invalidate();
     }
 
-    Map<Class<?>, Set<EventHandler>> handlersInListener = handlerFinder.findAllSubscribers(object);
-    for (Map.Entry<Class<?>, Set<EventHandler>> entry : handlersInListener.entrySet()) {
+    Map<EventKey, Set<EventHandler>> handlersInListener = handlerFinder.findAllSubscribers(object);
+    for (Map.Entry<EventKey, Set<EventHandler>> entry : handlersInListener.entrySet()) {
       Set<EventHandler> currentHandlers = getHandlersForEventType(entry.getKey());
       Collection<EventHandler> eventMethodsInListener = entry.getValue();
 
       if (currentHandlers == null || !currentHandlers.containsAll(eventMethodsInListener)) {
         throw new IllegalArgumentException(
-            "Missing event handler for an annotated method. Is " + object.getClass()
-                + " registered?");
+                "Missing event handler for an annotated method. Is " + object.getClass()
+                        + " registered?");
       }
 
       for (EventHandler handler : currentHandlers) {
@@ -298,6 +298,10 @@ public class Bus {
       }
       currentHandlers.removeAll(eventMethodsInListener);
     }
+  }
+
+  public void post(Object event) {
+    post("default", event);
   }
 
   /**
@@ -310,7 +314,7 @@ public class Bus {
    * @param event event to post.
    * @throws NullPointerException if the event is null.
    */
-  public void post(Object event) {
+  public void post(String name, Object event) {
     if (event == null) {
       throw new NullPointerException("Event to post must not be null.");
     }
@@ -320,7 +324,7 @@ public class Bus {
 
     boolean dispatched = false;
     for (Class<?> eventType : dispatchTypes) {
-      Set<EventHandler> wrappers = getHandlersForEventType(eventType);
+      Set<EventHandler> wrappers = getHandlersForEventType(new EventKey(name, eventType));
 
       if (wrappers != null && !wrappers.isEmpty()) {
         dispatched = true;
@@ -385,7 +389,7 @@ public class Bus {
       wrapper.handleEvent(event);
     } catch (InvocationTargetException e) {
       throwRuntimeException(
-          "Could not dispatch event: " + event.getClass() + " to handler " + wrapper, e);
+              "Could not dispatch event: " + event.getClass() + " to handler " + wrapper, e);
     }
   }
 
@@ -396,7 +400,7 @@ public class Bus {
    * @param type type of producer to retrieve.
    * @return currently registered producer, or {@code null}.
    */
-  EventProducer getProducerForEventType(Class<?> type) {
+  EventProducer getProducerForEventType(EventKey type) {
     return producersByType.get(type);
   }
 
@@ -407,7 +411,7 @@ public class Bus {
    * @param type type of handlers to retrieve.
    * @return currently registered handlers, or {@code null}.
    */
-  Set<EventHandler> getHandlersForEventType(Class<?> type) {
+  Set<EventHandler> getHandlersForEventType(EventKey type) {
     return handlersByType.get(type);
   }
 
@@ -464,7 +468,7 @@ public class Bus {
   }
 
   private final ConcurrentMap<Class<?>, Set<Class<?>>> flattenHierarchyCache =
-      new ConcurrentHashMap<Class<?>, Set<Class<?>>>();
+          new ConcurrentHashMap<Class<?>, Set<Class<?>>>();
 
   /** Simple struct representing an event and its handler. */
   static class EventWithHandler {

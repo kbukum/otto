@@ -60,7 +60,7 @@ public class BusTest {
     StringCatcher catcher = new StringCatcher();
     bus.register(catcher);
 
-    Set<EventHandler> wrappers = bus.getHandlersForEventType(String.class);
+    Set<EventHandler> wrappers = bus.getHandlersForEventType(new EventKey("default", String.class));
     assertNotNull("Should have at least one method registered.", wrappers);
     assertEquals("One method should be registered.", 1, wrappers.size());
 
